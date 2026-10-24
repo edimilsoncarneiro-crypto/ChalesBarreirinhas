@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+data/database.sqlite
+data/database.sqlite-*
+data/auth_config.json
+data/auth_config.json.*
+data/auth_setup_token.txt
+backups/
+npm-debug.log*
+data/initial_seed.json

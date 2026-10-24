@@ -1,0 +1,15 @@
+{
+  "name": "chales-barreirinhas",
+  "version": "1.0.0",
+  "description": "Sistema de Gestão de Obras e Controle Financeiro - Chalés Barreirinhas com SQLite",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
