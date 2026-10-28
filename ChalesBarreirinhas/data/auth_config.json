@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "username": "edjunior",
+  "salt": "098a8be0fdb2091a53437bad8a31f126",
+  "passwordHash": "ae36eb7ded76fad3591288f8219bc22a1c8bb3ab378823ea89f826c95ba1e47c873f783bd2a510d7b0515fd249108b93bfc8a03d0aab2c63911f11efad1599c5",
+  "sessionSecret": "5ddaa31c488ffa9226d8757788ea7a3c25010b0117db8e6cfed6877a705e0767",
+  "createdAt": "2026-10-20T04:51:37.894Z"
+}
