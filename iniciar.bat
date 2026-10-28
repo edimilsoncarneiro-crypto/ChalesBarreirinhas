@@ -1,49 +1,83 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Projeto Chales Barreirinhas - Servidor SQLite
+title Projeto Chales Barreirinhas - Servidor PostgreSQL
 color 0A
 
 cd /d "%~dp0"
 
 echo ========================================================
 echo   PROJETO CHALES EM BARREIRINHAS - SERVIDOR LOCAL
-echo   Banco de Dados: SQLite (data\database.sqlite)
+echo   Banco de Dados: PostgreSQL
 echo ========================================================
 echo.
 
 where node >nul 2>nul
-if errorlevel 1 (
-    color 0C
-    echo [ERRO] O Node.js nao foi encontrado no sistema.
-    echo Instale o Node.js 22 ou mais recente e abra um novo terminal.
+if errorlevel 1 goto :node_missing
+goto :check_env
+
+:node_missing
+color 0C
+echo [ERRO] O Node.js nao foi encontrado no sistema.
+echo Instale o Node.js 18 ou mais recente e abra um novo terminal.
+echo.
+pause
+exit /b 1
+
+:check_env
+if exist ".env" goto :setup_paths
+if exist ".env.example" (
+    copy /y ".env.example" ".env" >nul
+    echo [AVISO] O arquivo .env foi criado automaticamente a partir de .env.example.
+    echo         Confira as credenciais do PostgreSQL no arquivo .env se necessario.
     echo.
-    pause
-    exit /b 1
 )
 
-node -e "if (Number(process.versions.node.split('.')[0]) < 22) process.exit(1)"
-if errorlevel 1 (
-    color 0C
-    echo [ERRO] Este projeto precisa do Node.js 22 ou mais recente para usar SQLite.
-    echo Atualize o Node.js e tente novamente.
-    echo.
-    pause
-    exit /b 1
-)
+:setup_paths
+rem Configura diretorio de modulos no disco local C: para contornar bloqueios do Google Drive (drive G:)
+set "MODULES_DIR=%LOCALAPPDATA%\ChalesBarreirinhas_Modules"
+if not exist "%MODULES_DIR%" mkdir "%MODULES_DIR%"
+set "NODE_PATH=%MODULES_DIR%\node_modules;%CD%\node_modules"
 
-if not exist "node_modules\express\package.json" (
-    echo Instalando as dependencias do projeto...
-    call npm install
+rem Se houver arquivos corrompidos de node_modules no Google Drive, remove
+if exist "node_modules" (
+    node -e "require('express'); require('pg')" >nul 2>nul
     if errorlevel 1 (
-        color 0C
-        echo [ERRO] Nao foi possivel instalar as dependencias.
-        pause
-        exit /b 1
+        echo Limpando pasta node_modules corrompida do Google Drive...
+        rd /s /q "node_modules" 2>nul
     )
 )
 
-echo Iniciando o servidor Express com SQLite...
+:check_deps
+node -e "require('express'); require('pg')" >nul 2>nul
+if errorlevel 1 goto :install_deps
+goto :start_app
+
+:install_deps
+echo ========================================================
+echo   Instalando dependencias no disco local C:
+echo   Destino: %MODULES_DIR%
+echo   (Evita o erro TAR_ENTRY_ERROR EBADF do Google Drive)
+echo ========================================================
+echo.
+
+copy /y "package.json" "%MODULES_DIR%\package.json" >nul
+pushd "%MODULES_DIR%"
+call npm install
+popd
+
+node -e "require('express'); require('pg')" >nul 2>nul
+if errorlevel 1 (
+    color 0C
+    echo.
+    echo [ERRO] Nao foi possivel instalar as dependencias no disco local.
+    echo.
+    pause
+    exit /b 1
+)
+
+:start_app
+echo Iniciando o servidor Express com PostgreSQL...
 echo.
 
 node server.js
@@ -56,4 +90,3 @@ if not "%server_exit_code%"=="0" (
 )
 
 exit /b %server_exit_code%
-

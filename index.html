@@ -199,14 +199,14 @@
                             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-600 dark:text-amber-300 border border-amber-500/30">2ª Fase</span>
                         </h3>
                         <p class="text-[11px] text-slate-600 dark:text-amber-300/80 mt-0.5">
-                            Persistência oficial em banco de dados SQLite local ativo! Dados sincronizados em tempo real via API.
+                            Persistência oficial em banco de dados PostgreSQL ativo! Dados sincronizados em tempo real via API.
                         </p>
                     </div>
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
                     <button onclick="resetDefaultData()" class="text-[10px] font-bold text-slate-400 hover:text-rose-400 transition underline mr-2" title="Voltar aos dados originais de fábrica">Resetar ao Padrão</button>
                     <span id="storage-status-badge" class="inline-flex items-center px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-emerald-500/10 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-500/30 shadow-inner">
-                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse"></span> Banco SQLite Ativo
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse"></span> Banco PostgreSQL Ativo
                     </span>
                 </div>
             </div>
@@ -677,10 +677,10 @@
             }, 3000);
         }
 
-        // Carrega dados da API REST conectada ao SQLite e realiza migração segura do localStorage
+        // Carrega dados da API REST conectada ao PostgreSQL
         async function loadDataFromApi() {
             try {
-                // 1. Migração segura do localStorage para o SQLite se houver dados locais não migrados
+                // 1. Migração segura do localStorage para o banco se houver dados locais não migrados
                 const localExp = localStorage.getItem('obra_expenses_data');
                 const localApo = localStorage.getItem('obra_aportes_data');
                 const alreadyMigrated = localStorage.getItem('obra_sqlite_migrated');
@@ -745,10 +745,10 @@
             if (!badge) return;
             if (connected) {
                 badge.className = "inline-flex items-center px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-emerald-500/10 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-500/30 shadow-inner";
-                badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse"></span> SQLite Conectado (${expensesData.length} registros)`;
+                badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse"></span> PostgreSQL Conectado (${expensesData.length} registros)`;
             } else {
                 badge.className = "inline-flex items-center px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-amber-500/10 dark:bg-amber-950/60 text-amber-600 dark:text-amber-300 border border-amber-500/30 shadow-inner";
-                badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5"></span> SQLite desconectado - gravação desativada`;
+                badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5"></span> PostgreSQL desconectado - gravação desativada`;
             }
         }
 
@@ -758,17 +758,17 @@
 
         async function resetDefaultData() {
             if (!isOnline) {
-                alert('O banco SQLite não está conectado. Inicie o servidor pelo arquivo iniciar.bat antes de alterar os dados.');
+                alert('O banco PostgreSQL não está conectado. Inicie o servidor pelo arquivo iniciar.bat antes de alterar os dados.');
                 return;
             }
-            if (confirm("Resetar todos os dados ao padrão original? Um backup do banco SQLite atual será gerado automaticamente antes do procedimento.")) {
+            if (confirm("Resetar todos os dados ao padrão original? Um backup do banco PostgreSQL atual será gerado automaticamente antes do procedimento.")) {
                 try {
                     const res = await fetch(`${API_BASE}/reset`, { method: 'POST' });
                     if (!res.ok) throw new Error('Não foi possível restaurar os dados.');
-                    showToast('Banco SQLite restaurado para os dados originais de fábrica!');
+                    showToast('Banco PostgreSQL restaurado para os dados originais!');
                     await loadDataFromApi();
                 } catch (e) {
-                    alert('Erro ao restaurar o banco SQLite: ' + e.message);
+                    alert('Erro ao restaurar o banco PostgreSQL: ' + e.message);
                 }
             }
         }
@@ -798,7 +798,7 @@
 
         async function exportBackupJSON() {
             if (!isOnline) {
-                alert('O banco SQLite não está conectado. Conecte o servidor para exportar um backup completo.');
+                alert('O banco PostgreSQL não está conectado. Conecte o servidor para exportar um backup completo.');
                 return;
             }
             if (isOnline) {
@@ -809,7 +809,7 @@
                         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupData, null, 2));
                         const downloadAnchor = document.createElement('a');
                         downloadAnchor.setAttribute("href", dataStr);
-                        downloadAnchor.setAttribute("download", `Chales_Barreirinhas_SQLite_Backup.json`);
+                        downloadAnchor.setAttribute("download", `Chales_Barreirinhas_PostgreSQL_Backup.json`);
                         document.body.appendChild(downloadAnchor);
                         downloadAnchor.click();
                         downloadAnchor.remove();
@@ -842,7 +842,7 @@
                             const errData = await res.json();
                             throw new Error(errData.error || 'Não foi possível restaurar o backup.');
                         }
-                        showToast('Dados restaurados no SQLite com sucesso!');
+                        showToast('Dados restaurados no PostgreSQL com sucesso!');
                         await loadDataFromApi();
                     } else {
                         alert('Arquivo de backup inválido.');
@@ -902,7 +902,7 @@
         async function handleSaveAporte(event) {
             event.preventDefault();
             if (!isOnline) {
-                alert('O banco SQLite não está conectado. Inicie o servidor pelo arquivo iniciar.bat e tente novamente.');
+                alert('O banco PostgreSQL não está conectado. Inicie o servidor pelo arquivo iniciar.bat e tente novamente.');
                 return;
             }
             const id = document.getElementById('aporte-id').value;
@@ -934,12 +934,12 @@
                         throw new Error(errData.error || 'Erro na requisição');
                     }
 
-                    showToast(id !== "" ? 'Aporte atualizado no SQLite!' : 'Novo aporte gravado no SQLite!');
+                    showToast(id !== "" ? 'Aporte atualizado no PostgreSQL!' : 'Novo aporte gravado no PostgreSQL!');
                     closeAporteModal();
                     await loadDataFromApi();
                     return;
                 } catch (err) {
-                    alert('Erro ao gravar aporte no SQLite: ' + err.message);
+                    alert('Erro ao gravar aporte no PostgreSQL: ' + err.message);
                     return;
                 }
             }
@@ -947,7 +947,7 @@
 
         async function deleteAporte(id) {
             if (!isOnline) {
-                alert('O banco SQLite não está conectado. Inicie o servidor pelo arquivo iniciar.bat e tente novamente.');
+                alert('O banco PostgreSQL não está conectado. Inicie o servidor pelo arquivo iniciar.bat e tente novamente.');
                 return;
             }
             if (!confirm('Deseja realmente excluir este aporte?')) return;
@@ -959,11 +959,11 @@
                         const errData = await res.json();
                         throw new Error(errData.error || 'Erro ao excluir');
                     }
-                    showToast('Aporte excluído do SQLite!');
+                    showToast('Aporte excluído do PostgreSQL!');
                     await loadDataFromApi();
                     return;
                 } catch (err) {
-                    alert('Erro ao excluir do SQLite: ' + err.message);
+                    alert('Erro ao excluir do PostgreSQL: ' + err.message);
                     return;
                 }
             }
@@ -1139,7 +1139,7 @@
         async function handleSaveExpense(event) {
             event.preventDefault();
             if (!isOnline) {
-                alert('O banco SQLite não está conectado. Inicie o servidor pelo arquivo iniciar.bat e tente novamente.');
+                alert('O banco PostgreSQL não está conectado. Inicie o servidor pelo arquivo iniciar.bat e tente novamente.');
                 return;
             }
             const id = document.getElementById('exp-id').value;
@@ -1173,12 +1173,12 @@
                         throw new Error(errData.error || 'Erro na requisição');
                     }
 
-                    showToast(id !== "" ? 'Lançamento atualizado no SQLite!' : 'Novo lançamento gravado no SQLite!');
+                    showToast(id !== "" ? 'Lançamento atualizado no PostgreSQL!' : 'Novo lançamento gravado no PostgreSQL!');
                     closeExpenseModal();
                     await loadDataFromApi();
                     return;
                 } catch (err) {
-                    alert('Erro ao gravar lançamento no SQLite: ' + err.message);
+                    alert('Erro ao gravar lançamento no PostgreSQL: ' + err.message);
                     return;
                 }
             }
@@ -1198,7 +1198,7 @@
 
         async function deleteExpense(id) {
             if (!isOnline) {
-                alert('O banco SQLite não está conectado. Inicie o servidor pelo arquivo iniciar.bat e tente novamente.');
+                alert('O banco PostgreSQL não está conectado. Inicie o servidor pelo arquivo iniciar.bat e tente novamente.');
                 return;
             }
             if (!confirm('Deseja realmente excluir este lançamento?')) return;
@@ -1210,11 +1210,11 @@
                         const errData = await res.json();
                         throw new Error(errData.error || 'Erro ao excluir');
                     }
-                    showToast('Lançamento excluído do SQLite!');
+                    showToast('Lançamento excluído do PostgreSQL!');
                     await loadDataFromApi();
                     return;
                 } catch (err) {
-                    alert('Erro ao excluir do SQLite: ' + err.message);
+                    alert('Erro ao excluir do PostgreSQL: ' + err.message);
                     return;
                 }
             }

@@ -1,71 +1,206 @@
-const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
 
+// Se as dependências estiverem instaladas no disco local C: (contornando o Google Drive)
+const localModulesDir = path.join(process.env.LOCALAPPDATA || 'C:\\', 'ChalesBarreirinhas_Modules', 'node_modules');
+if (fs.existsSync(localModulesDir)) {
+  const Module = require('module');
+  if (Module.globalPaths && !Module.globalPaths.includes(localModulesDir)) {
+    Module.globalPaths.push(localModulesDir);
+  }
+}
+
+// Carregamento resiliente de variáveis de ambiente do .env
+try {
+  require('dotenv').config();
+} catch (e) {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const idx = trimmed.indexOf('=');
+      if (idx !== -1) {
+        const key = trimmed.slice(0, idx).trim();
+        const val = trimmed.slice(idx + 1).trim();
+        if (process.env[key] === undefined) process.env[key] = val;
+      }
+    }
+  }
+}
+
+let Pool;
+try {
+  ({ Pool } = require('pg'));
+} catch (e) {
+  console.error('\n=======================================================');
+  console.error('  ❌ O pacote "pg" (driver PostgreSQL) não foi encontrado!');
+  console.error('=======================================================');
+  console.error('Para instalar as dependências necessárias, execute no terminal:');
+  console.error('   npm install\n');
+  console.error('Ou simplesmente execute o arquivo iniciar.bat que instalará automaticamente.\n');
+  process.exit(1);
+}
+
 const DATA_DIR = path.join(__dirname, 'data');
 const BACKUPS_DIR = path.join(__dirname, 'backups');
-const DB_FILE = path.join(DATA_DIR, 'database.sqlite');
 const SEED_FILE = path.join(DATA_DIR, 'initial_seed.json');
 
 // Garante a existência das pastas data e backups
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
 
-let dbInstance = null;
+function getPoolConfig() {
+  const config = {};
 
-function getDb() {
-  if (!dbInstance) {
-    dbInstance = new DatabaseSync(DB_FILE);
-    // Habilita modo WAL e foreign keys para maior integridade e desempenho
-    dbInstance.exec('PRAGMA journal_mode = WAL;');
-    dbInstance.exec('PRAGMA foreign_keys = ON;');
+  if (process.env.DATABASE_URL) {
+    config.connectionString = process.env.DATABASE_URL;
+    if (
+      process.env.PGSSL === 'true' ||
+      process.env.DATABASE_URL.includes('sslmode=require') ||
+      process.env.DATABASE_URL.includes('supabase') ||
+      process.env.DATABASE_URL.includes('neon.tech')
+    ) {
+      config.ssl = { rejectUnauthorized: false };
+    }
+  } else {
+    config.host = process.env.PGHOST || 'localhost';
+    config.port = parseInt(process.env.PGPORT, 10) || 5432;
+    config.database = process.env.PGDATABASE || 'chales_barreirinhas';
+    config.user = process.env.PGUSER || 'postgres';
+    config.password = String(process.env.PGPASSWORD !== undefined ? process.env.PGPASSWORD : 'postgres');
+    if (process.env.PGSSL === 'true') {
+      config.ssl = { rejectUnauthorized: false };
+    }
   }
-  return dbInstance;
+  return config;
+}
+
+let poolInstance = null;
+
+function getPool() {
+  if (!poolInstance) {
+    const config = getPoolConfig();
+    poolInstance = new Pool(config);
+
+    poolInstance.on('error', (err) => {
+      console.error('[PostgreSQL] Erro inesperado no cliente do pool:', err.message);
+    });
+  }
+  return poolInstance;
 }
 
 /**
- * Criação segura das tabelas e carga inicial apenas se o banco estiver vazio.
- * Nunca apaga nem sobrescreve dados existentes.
+ * Tenta criar automaticamente o banco de dados caso não exista (em ambiente local)
  */
-function initDatabase() {
-  const db = getDb();
+async function ensureDatabaseExists(config) {
+  if (config.connectionString) return;
+  const targetDb = config.database;
+  if (!targetDb || targetDb === 'postgres') return;
 
-  // 1. Criação das tabelas caso não existam
-  db.exec(`
+  const adminPool = new Pool({ ...config, database: 'postgres' });
+  try {
+    const checkRes = await adminPool.query(
+      'SELECT 1 FROM pg_database WHERE datname = $1',
+      [targetDb]
+    );
+    if (checkRes.rows.length === 0) {
+      console.log(`[PostgreSQL] O banco "${targetDb}" não existia. Criando automaticamente...`);
+      const safeName = targetDb.replace(/[^a-zA-Z0-9_]/g, '');
+      await adminPool.query(`CREATE DATABASE "${safeName}"`);
+      console.log(`[PostgreSQL] ✅ Banco de dados "${safeName}" criado com sucesso!`);
+    }
+  } catch (err) {
+    // Se falhar (ex: serviço offline ou senha errada), prossegue para o fluxo de conexão reportar o erro exato
+  } finally {
+    await adminPool.end().catch(() => {});
+  }
+}
+
+async function query(text, params) {
+  const pool = getPool();
+  return await pool.query(text, params);
+}
+
+function formatExpenseRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    phase: row.phase,
+    desc: row.desc,
+    qty: row.qty !== null && row.qty !== undefined ? String(row.qty) : '',
+    value: parseFloat(row.value) || 0,
+    status: row.status || 'Confirmado',
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
+function formatAporteRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    date: row.date,
+    desc: row.desc,
+    value: parseFloat(row.value) || 0,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
+/**
+ * Criação segura das tabelas e carga inicial se o banco estiver vazio.
+ */
+async function initDatabase() {
+  const config = getPoolConfig();
+  await ensureDatabaseExists(config);
+
+  const pool = getPool();
+
+  // 1. Testa a conexão obtendo um cliente do pool
+  const testClient = await pool.connect();
+  testClient.release();
+
+  // 2. Criação das tabelas
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS expenses (
-      id INTEGER PRIMARY KEY,
-      phase TEXT NOT NULL,
-      desc TEXT NOT NULL,
-      qty TEXT,
-      value REAL NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'Confirmado',
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
-      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+      id BIGINT PRIMARY KEY,
+      phase VARCHAR(50) NOT NULL,
+      "desc" TEXT NOT NULL,
+      qty VARCHAR(255),
+      value NUMERIC(15, 2) NOT NULL DEFAULT 0,
+      status VARCHAR(50) NOT NULL DEFAULT 'Confirmado',
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS aportes (
-      id INTEGER PRIMARY KEY,
-      date TEXT NOT NULL,
-      desc TEXT NOT NULL,
-      value REAL NOT NULL DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
-      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+      id BIGINT PRIMARY KEY,
+      date VARCHAR(50) NOT NULL,
+      "desc" TEXT NOT NULL,
+      value NUMERIC(15, 2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
+      key VARCHAR(100) PRIMARY KEY,
       value TEXT,
-      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
-  // 2. Verifica se já existem dados
-  const expCount = db.prepare('SELECT COUNT(*) as count FROM expenses').get().count;
-  const apoCount = db.prepare('SELECT COUNT(*) as count FROM aportes').get().count;
+  // 3. Verifica contagem atual de registros
+  const expRes = await pool.query('SELECT COUNT(*) as count FROM expenses');
+  const apoRes = await pool.query('SELECT COUNT(*) as count FROM aportes');
 
-  console.log(`[Database] Registros atuais no SQLite: ${expCount} despesas, ${apoCount} aportes.`);
+  const expCount = parseInt(expRes.rows[0].count, 10);
+  const apoCount = parseInt(apoRes.rows[0].count, 10);
 
-  // 3. Se estiver completamente vazio, realiza o seed seguro inicial
+  console.log(`[Database] Registros atuais no PostgreSQL: ${expCount} despesas, ${apoCount} aportes.`);
+
+  // 4. Se estiver completamente vazio, realiza carga inicial do seed
   if (expCount === 0 || apoCount === 0) {
     let seedData = null;
     if (fs.existsSync(SEED_FILE)) {
@@ -77,87 +212,97 @@ function initDatabase() {
     }
 
     if (seedData) {
-      db.exec('BEGIN TRANSACTION');
+      const client = await pool.connect();
       try {
+        await client.query('BEGIN');
+
         if (expCount === 0 && Array.isArray(seedData.expenses)) {
-          const insertExp = db.prepare(`
-            INSERT INTO expenses (id, phase, desc, qty, value, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-          `);
           for (const item of seedData.expenses) {
-            insertExp.run(
-              item.id,
+            await client.query(`
+              INSERT INTO expenses (id, phase, "desc", qty, value, status)
+              VALUES ($1, $2, $3, $4, $5, $6)
+              ON CONFLICT (id) DO NOTHING
+            `, [
+              parseInt(item.id, 10),
               String(item.phase || 'FASE_2'),
               String(item.desc || ''),
               item.qty !== null && item.qty !== undefined ? String(item.qty) : '',
               parseFloat(item.value) || 0,
               String(item.status || 'Confirmado')
-            );
+            ]);
           }
-          console.log(`[Database] Carga inicial de ${seedData.expenses.length} despesas concluída com sucesso.`);
+          console.log(`[Database] Carga inicial de ${seedData.expenses.length} despesas concluída no PostgreSQL.`);
         }
 
         if (apoCount === 0 && Array.isArray(seedData.aportes)) {
-          const insertApo = db.prepare(`
-            INSERT INTO aportes (id, date, desc, value)
-            VALUES (?, ?, ?, ?)
-          `);
           for (const item of seedData.aportes) {
-            insertApo.run(
-              item.id,
+            await client.query(`
+              INSERT INTO aportes (id, date, "desc", value)
+              VALUES ($1, $2, $3, $4)
+              ON CONFLICT (id) DO NOTHING
+            `, [
+              parseInt(item.id, 10),
               String(item.date || ''),
               String(item.desc || ''),
               parseFloat(item.value) || 0
-            );
+            ]);
           }
-          console.log(`[Database] Carga inicial de ${seedData.aportes.length} aportes concluída com sucesso.`);
+          console.log(`[Database] Carga inicial de ${seedData.aportes.length} aportes concluída no PostgreSQL.`);
         }
 
-        db.exec('COMMIT');
+        await client.query('COMMIT');
       } catch (error) {
-        db.exec('ROLLBACK');
-        console.error('[Database] Falha ao realizar seed inicial (transação revertida):', error);
+        await client.query('ROLLBACK');
+        console.error('[Database] Falha ao realizar seed inicial no PostgreSQL:', error);
+      } finally {
+        client.release();
       }
     }
   }
 }
 
 /**
- * Procedimento de Backup do Arquivo SQLite
+ * Procedimento de Backup das tabelas em JSON
  */
-function createDatabaseBackup(reason = 'auto') {
+async function createDatabaseBackup(reason = 'auto') {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupFileName = `database_backup_${timestamp}_${reason}.sqlite`;
+  const backupFileName = `database_backup_${timestamp}_${reason}.json`;
   const backupPath = path.join(BACKUPS_DIR, backupFileName);
 
-  if (fs.existsSync(DB_FILE)) {
-    // Garante que os dados ainda no WAL sejam incorporados antes da cópia.
-    getDb().exec('PRAGMA wal_checkpoint(FULL);');
-    fs.copyFileSync(DB_FILE, backupPath);
-    console.log(`[Backup] Backup do banco SQLite gerado em: ${backupPath}`);
-    return backupPath;
-  }
-  return null;
+  const expenses = await getAllExpenses();
+  const aportes = await getAllAportes();
+  const totals = await getFinancialTotals();
+
+  const backupData = {
+    exportedAt: new Date().toISOString(),
+    database: 'PostgreSQL',
+    reason,
+    totals,
+    expenses,
+    aportes
+  };
+
+  fs.writeFileSync(backupPath, JSON.stringify(backupData, null, 2), 'utf8');
+  console.log(`[Backup] Backup do banco PostgreSQL gerado em: ${backupPath}`);
+  return backupPath;
 }
 
 // ==========================================
 // OPERAÇÕES: DESPESAS (EXPENSES)
 // ==========================================
 
-function getAllExpenses() {
-  const db = getDb();
-  // Ordena por id decrescente para que novos lançamentos fiquem no topo
-  return db.prepare('SELECT id, phase, desc, qty, value, status, created_at, updated_at FROM expenses ORDER BY id DESC').all();
+async function getAllExpenses() {
+  const res = await query('SELECT id, phase, "desc", qty, value, status, created_at, updated_at FROM expenses ORDER BY id DESC');
+  return res.rows.map(formatExpenseRow);
 }
 
-function getExpenseById(id) {
-  const db = getDb();
-  return db.prepare('SELECT id, phase, desc, qty, value, status, created_at, updated_at FROM expenses WHERE id = ?').get(id);
+async function getExpenseById(id) {
+  const res = await query('SELECT id, phase, "desc", qty, value, status, created_at, updated_at FROM expenses WHERE id = $1', [parseInt(id, 10)]);
+  return res.rows.length ? formatExpenseRow(res.rows[0]) : null;
 }
 
-function createExpense(data) {
+async function createExpense(data) {
   validateExpenseData(data);
-  const db = getDb();
   const id = data.id ? parseInt(data.id, 10) : Date.now();
   const phase = String(data.phase);
   const desc = String(data.desc).trim();
@@ -165,19 +310,19 @@ function createExpense(data) {
   const value = parseFloat(data.value) || 0;
   const status = String(data.status || 'Confirmado');
 
-  const stmt = db.prepare(`
-    INSERT INTO expenses (id, phase, desc, qty, value, status)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  stmt.run(id, phase, desc, qty, value, status);
-  return getExpenseById(id);
+  const res = await query(`
+    INSERT INTO expenses (id, phase, "desc", qty, value, status)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, phase, "desc", qty, value, status, created_at, updated_at
+  `, [id, phase, desc, qty, value, status]);
+
+  return formatExpenseRow(res.rows[0]);
 }
 
-function updateExpense(id, data) {
+async function updateExpense(id, data) {
   validateExpenseData(data);
-  const db = getDb();
   const targetId = parseInt(id, 10);
-  const existing = getExpenseById(targetId);
+  const existing = await getExpenseById(targetId);
   if (!existing) return null;
 
   const phase = String(data.phase);
@@ -186,96 +331,83 @@ function updateExpense(id, data) {
   const value = parseFloat(data.value) || 0;
   const status = String(data.status || 'Confirmado');
 
-  const stmt = db.prepare(`
+  const res = await query(`
     UPDATE expenses
-    SET phase = ?, desc = ?, qty = ?, value = ?, status = ?, updated_at = datetime('now', 'localtime')
-    WHERE id = ?
-  `);
-  stmt.run(phase, desc, qty, value, status, targetId);
-  return getExpenseById(targetId);
+    SET phase = $1, "desc" = $2, qty = $3, value = $4, status = $5, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $6
+    RETURNING id, phase, "desc", qty, value, status, created_at, updated_at
+  `, [phase, desc, qty, value, status, targetId]);
+
+  return formatExpenseRow(res.rows[0]);
 }
 
-function deleteExpense(id) {
-  const db = getDb();
+async function deleteExpense(id) {
   const targetId = parseInt(id, 10);
-  const existing = getExpenseById(targetId);
-  if (!existing) return false;
-
-  const stmt = db.prepare('DELETE FROM expenses WHERE id = ?');
-  stmt.run(targetId);
-  return true;
+  const res = await query('DELETE FROM expenses WHERE id = $1', [targetId]);
+  return res.rowCount > 0;
 }
 
 // ==========================================
 // OPERAÇÕES: APORTES
 // ==========================================
 
-function getAllAportes() {
-  const db = getDb();
-  return db.prepare('SELECT id, date, desc, value, created_at, updated_at FROM aportes ORDER BY id DESC').all();
+async function getAllAportes() {
+  const res = await query('SELECT id, date, "desc", value, created_at, updated_at FROM aportes ORDER BY id DESC');
+  return res.rows.map(formatAporteRow);
 }
 
-function getAporteById(id) {
-  const db = getDb();
-  return db.prepare('SELECT id, date, desc, value, created_at, updated_at FROM aportes WHERE id = ?').get(id);
+async function getAporteById(id) {
+  const res = await query('SELECT id, date, "desc", value, created_at, updated_at FROM aportes WHERE id = $1', [parseInt(id, 10)]);
+  return res.rows.length ? formatAporteRow(res.rows[0]) : null;
 }
 
-function createAporte(data) {
+async function createAporte(data) {
   validateAporteData(data);
-  const db = getDb();
   const id = data.id ? parseInt(data.id, 10) : Date.now();
   const date = String(data.date).trim();
   const desc = String(data.desc).trim();
   const value = parseFloat(data.value) || 0;
 
-  const stmt = db.prepare(`
-    INSERT INTO aportes (id, date, desc, value)
-    VALUES (?, ?, ?, ?)
-  `);
-  stmt.run(id, date, desc, value);
-  return getAporteById(id);
+  const res = await query(`
+    INSERT INTO aportes (id, date, "desc", value)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id, date, "desc", value, created_at, updated_at
+  `, [id, date, desc, value]);
+
+  return formatAporteRow(res.rows[0]);
 }
 
-function updateAporte(id, data) {
+async function updateAporte(id, data) {
   validateAporteData(data);
-  const db = getDb();
   const targetId = parseInt(id, 10);
-  const existing = getAporteById(targetId);
+  const existing = await getAporteById(targetId);
   if (!existing) return null;
 
   const date = String(data.date).trim();
   const desc = String(data.desc).trim();
   const value = parseFloat(data.value) || 0;
 
-  const stmt = db.prepare(`
+  const res = await query(`
     UPDATE aportes
-    SET date = ?, desc = ?, value = ?, updated_at = datetime('now', 'localtime')
-    WHERE id = ?
-  `);
-  stmt.run(date, desc, value, targetId);
-  return getAporteById(targetId);
+    SET date = $1, "desc" = $2, value = $3, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $4
+    RETURNING id, date, "desc", value, created_at, updated_at
+  `, [date, desc, value, targetId]);
+
+  return formatAporteRow(res.rows[0]);
 }
 
-function deleteAporte(id) {
-  const db = getDb();
+async function deleteAporte(id) {
   const targetId = parseInt(id, 10);
-  const existing = getAporteById(targetId);
-  if (!existing) return false;
-
-  const stmt = db.prepare('DELETE FROM aportes WHERE id = ?');
-  stmt.run(targetId);
-  return true;
+  const res = await query('DELETE FROM aportes WHERE id = $1', [targetId]);
+  return res.rowCount > 0;
 }
 
 // ==========================================
 // MIGRAÇÃO SEGURA A PARTIR DO LOCALSTORAGE
 // ==========================================
 
-/**
- * Migra dados do localStorage para o SQLite sem duplicar e sem apagar registros existentes.
- */
-function migrateFromLocalStorage(payload) {
-  const db = getDb();
+async function migrateFromLocalStorage(payload) {
   const expenses = Array.isArray(payload.expenses) ? payload.expenses : [];
   const aportes = Array.isArray(payload.aportes) ? payload.aportes : [];
 
@@ -284,64 +416,64 @@ function migrateFromLocalStorage(payload) {
   let skippedExpenses = 0;
   let skippedAportes = 0;
 
-  createDatabaseBackup('pre_migration');
+  await createDatabaseBackup('pre_migration');
 
-  db.exec('BEGIN TRANSACTION');
+  const client = await getPool().connect();
   try {
-    const checkExp = db.prepare('SELECT id FROM expenses WHERE id = ?');
-    const insertExp = db.prepare(`
-      INSERT INTO expenses (id, phase, desc, qty, value, status)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
+    await client.query('BEGIN');
 
     for (const item of expenses) {
       if (!item || !item.id) continue;
-      const exists = checkExp.get(item.id);
-      if (exists) {
+      const itemId = parseInt(item.id, 10);
+      const check = await client.query('SELECT id FROM expenses WHERE id = $1', [itemId]);
+      if (check.rows.length > 0) {
         skippedExpenses++;
       } else {
-        insertExp.run(
-          parseInt(item.id, 10),
+        await client.query(`
+          INSERT INTO expenses (id, phase, "desc", qty, value, status)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `, [
+          itemId,
           String(item.phase || 'FASE_2'),
           String(item.desc || '').trim(),
           item.qty ? String(item.qty).trim() : '',
           parseFloat(item.value) || 0,
           String(item.status || 'Confirmado')
-        );
+        ]);
         insertedExpenses++;
       }
     }
 
-    const checkApo = db.prepare('SELECT id FROM aportes WHERE id = ?');
-    const insertApo = db.prepare(`
-      INSERT INTO aportes (id, date, desc, value)
-      VALUES (?, ?, ?, ?)
-    `);
-
     for (const item of aportes) {
       if (!item || !item.id) continue;
-      const exists = checkApo.get(item.id);
-      if (exists) {
+      const itemId = parseInt(item.id, 10);
+      const check = await client.query('SELECT id FROM aportes WHERE id = $1', [itemId]);
+      if (check.rows.length > 0) {
         skippedAportes++;
       } else {
-        insertApo.run(
-          parseInt(item.id, 10),
+        await client.query(`
+          INSERT INTO aportes (id, date, "desc", value)
+          VALUES ($1, $2, $3, $4)
+        `, [
+          itemId,
           String(item.date || '').trim(),
           String(item.desc || '').trim(),
           parseFloat(item.value) || 0
-        );
+        ]);
         insertedAportes++;
       }
     }
 
-    db.exec('COMMIT');
+    await client.query('COMMIT');
   } catch (error) {
-    db.exec('ROLLBACK');
-    console.error('[Migration] Erro durante migração (revertida):', error);
+    await client.query('ROLLBACK');
+    console.error('[Migration] Erro durante migração PostgreSQL (revertida):', error);
     throw error;
+  } finally {
+    client.release();
   }
 
-  const totals = getFinancialTotals();
+  const totals = await getFinancialTotals();
   return {
     success: true,
     insertedExpenses,
@@ -358,73 +490,79 @@ function migrateFromLocalStorage(payload) {
 // RESTAURAÇÃO E RESET COM BACKUP PRÉVIO
 // ==========================================
 
-function restoreData(payload) {
-  const db = getDb();
+async function restoreData(payload) {
   if (!payload || !Array.isArray(payload.expenses)) {
     throw new Error('Formato inválido de backup para restauração.');
   }
 
-  createDatabaseBackup('pre_restore');
+  await createDatabaseBackup('pre_restore');
 
-  db.exec('BEGIN TRANSACTION');
+  const client = await getPool().connect();
   try {
-    db.exec('DELETE FROM expenses;');
-    db.exec('DELETE FROM aportes;');
+    await client.query('BEGIN');
+    await client.query('DELETE FROM expenses');
+    await client.query('DELETE FROM aportes');
 
-    const insertExp = db.prepare(`
-      INSERT INTO expenses (id, phase, desc, qty, value, status)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
     for (const item of payload.expenses) {
-      insertExp.run(
+      await client.query(`
+        INSERT INTO expenses (id, phase, "desc", qty, value, status)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
         parseInt(item.id, 10),
         String(item.phase || 'FASE_2'),
         String(item.desc || ''),
         item.qty ? String(item.qty) : '',
         parseFloat(item.value) || 0,
         String(item.status || 'Confirmado')
-      );
+      ]);
     }
 
     if (Array.isArray(payload.aportes)) {
-      const insertApo = db.prepare(`
-        INSERT INTO aportes (id, date, desc, value)
-        VALUES (?, ?, ?, ?)
-      `);
       for (const item of payload.aportes) {
-        insertApo.run(
+        await client.query(`
+          INSERT INTO aportes (id, date, "desc", value)
+          VALUES ($1, $2, $3, $4)
+        `, [
           parseInt(item.id, 10),
           String(item.date || ''),
           String(item.desc || ''),
           parseFloat(item.value) || 0
-        );
+        ]);
       }
     }
 
-    db.exec('COMMIT');
-    return { success: true, countExpenses: payload.expenses.length, countAportes: (payload.aportes || []).length };
+    await client.query('COMMIT');
+    return {
+      success: true,
+      countExpenses: payload.expenses.length,
+      countAportes: (payload.aportes || []).length
+    };
   } catch (err) {
-    db.exec('ROLLBACK');
+    await client.query('ROLLBACK');
     throw err;
+  } finally {
+    client.release();
   }
 }
 
-function resetToSeed() {
+async function resetToSeed() {
   if (!fs.existsSync(SEED_FILE)) {
     throw new Error('Arquivo de dados padrão (initial_seed.json) não encontrado.');
   }
   const seed = JSON.parse(fs.readFileSync(SEED_FILE, 'utf8'));
-  return restoreData(seed);
+  return await restoreData(seed);
 }
 
 // ==========================================
 // CÁLCULO E CONFERÊNCIA FINANCEIRA
 // ==========================================
 
-function getFinancialTotals() {
-  const db = getDb();
-  const expenses = db.prepare('SELECT phase, value FROM expenses').all();
-  const aportes = db.prepare('SELECT value FROM aportes').all();
+async function getFinancialTotals() {
+  const expRes = await query('SELECT phase, value FROM expenses');
+  const apoRes = await query('SELECT value FROM aportes');
+
+  const expenses = expRes.rows;
+  const aportes = apoRes.rows;
 
   let sumFase1 = 0;
   let sumFase2 = 0;
@@ -491,8 +629,16 @@ function validateAporteData(data) {
   }
 }
 
+async function closePool() {
+  if (poolInstance) {
+    await poolInstance.end();
+    poolInstance = null;
+  }
+}
+
 module.exports = {
-  getDb,
+  getPool,
+  query,
   initDatabase,
   createDatabaseBackup,
   getAllExpenses,
@@ -508,6 +654,6 @@ module.exports = {
   migrateFromLocalStorage,
   restoreData,
   resetToSeed,
-  getFinancialTotals
+  getFinancialTotals,
+  closePool
 };
-

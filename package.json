@@ -1,15 +1,18 @@
 {
   "name": "chales-barreirinhas",
   "version": "1.0.0",
-  "description": "Sistema de Gestão de Obras e Controle Financeiro - Chalés Barreirinhas com SQLite",
+  "description": "Sistema de Gestão de Obras e Controle Financeiro - Chalés Barreirinhas com PostgreSQL",
   "main": "server.js",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=18.0.0"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "migrate:sqlite": "node migrate-sqlite-to-postgres.js"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
   }
 }

@@ -1,24 +1,41 @@
-// Silencia avisos experimentais do SQLite no console para saída limpa
-const _origEmit = process.emit;
-process.emit = function (name, data, ...args) {
-  if (name === 'warning' && typeof data === 'object' && data.name === 'ExperimentalWarning' && data.message && data.message.includes('SQLite')) {
-    return false;
-  }
-  return _origEmit.apply(process, [name, data, ...args]);
-};
-
-const express = require('express');
 const path = require('path');
 const fs = require('fs');
+
+// Se as dependências estiverem instaladas no disco local C: (contornando o Google Drive)
+const localModulesDir = path.join(process.env.LOCALAPPDATA || 'C:\\', 'ChalesBarreirinhas_Modules', 'node_modules');
+if (fs.existsSync(localModulesDir)) {
+  const Module = require('module');
+  if (Module.globalPaths && !Module.globalPaths.includes(localModulesDir)) {
+    Module.globalPaths.push(localModulesDir);
+  }
+}
+
+// Carregamento resiliente do .env (com ou sem pacote dotenv instalado)
+try {
+  require('dotenv').config();
+} catch (e) {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const idx = trimmed.indexOf('=');
+      if (idx !== -1) {
+        const key = trimmed.slice(0, idx).trim();
+        const val = trimmed.slice(idx + 1).trim();
+        if (process.env[key] === undefined) process.env[key] = val;
+      }
+    }
+  }
+}
+
+const express = require('express');
 const db = require('./database');
 const auth = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// Inicializa o banco SQLite com segurança
-db.initDatabase();
-auth.ensureSetupToken();
 
 // Middlewares
 app.use(express.json({ limit: '50mb' }));
@@ -116,18 +133,18 @@ app.use('/api', auth.requireAuth);
 // ROTAS DA API: DESPESAS (EXPENSES)
 // ==========================================
 
-app.get('/api/expenses', (req, res) => {
+app.get('/api/expenses', async (req, res) => {
   try {
-    const expenses = db.getAllExpenses();
+    const expenses = await db.getAllExpenses();
     res.json(expenses);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.get('/api/expenses/:id', (req, res) => {
+app.get('/api/expenses/:id', async (req, res) => {
   try {
-    const item = db.getExpenseById(req.params.id);
+    const item = await db.getExpenseById(req.params.id);
     if (!item) return res.status(404).json({ error: 'Lançamento não encontrado' });
     res.json(item);
   } catch (error) {
@@ -135,18 +152,18 @@ app.get('/api/expenses/:id', (req, res) => {
   }
 });
 
-app.post('/api/expenses', (req, res) => {
+app.post('/api/expenses', async (req, res) => {
   try {
-    const created = db.createExpense(req.body);
+    const created = await db.createExpense(req.body);
     res.status(201).json(created);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
 
-app.put('/api/expenses/:id', (req, res) => {
+app.put('/api/expenses/:id', async (req, res) => {
   try {
-    const updated = db.updateExpense(req.params.id, req.body);
+    const updated = await db.updateExpense(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Lançamento não encontrado' });
     res.json(updated);
   } catch (error) {
@@ -154,9 +171,9 @@ app.put('/api/expenses/:id', (req, res) => {
   }
 });
 
-app.delete('/api/expenses/:id', (req, res) => {
+app.delete('/api/expenses/:id', async (req, res) => {
   try {
-    const success = db.deleteExpense(req.params.id);
+    const success = await db.deleteExpense(req.params.id);
     if (!success) return res.status(404).json({ error: 'Lançamento não encontrado' });
     res.json({ success: true, message: 'Lançamento excluído com sucesso' });
   } catch (error) {
@@ -168,18 +185,18 @@ app.delete('/api/expenses/:id', (req, res) => {
 // ROTAS DA API: APORTES
 // ==========================================
 
-app.get('/api/aportes', (req, res) => {
+app.get('/api/aportes', async (req, res) => {
   try {
-    const aportes = db.getAllAportes();
+    const aportes = await db.getAllAportes();
     res.json(aportes);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.get('/api/aportes/:id', (req, res) => {
+app.get('/api/aportes/:id', async (req, res) => {
   try {
-    const item = db.getAporteById(req.params.id);
+    const item = await db.getAporteById(req.params.id);
     if (!item) return res.status(404).json({ error: 'Aporte não encontrado' });
     res.json(item);
   } catch (error) {
@@ -187,18 +204,18 @@ app.get('/api/aportes/:id', (req, res) => {
   }
 });
 
-app.post('/api/aportes', (req, res) => {
+app.post('/api/aportes', async (req, res) => {
   try {
-    const created = db.createAporte(req.body);
+    const created = await db.createAporte(req.body);
     res.status(201).json(created);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
 
-app.put('/api/aportes/:id', (req, res) => {
+app.put('/api/aportes/:id', async (req, res) => {
   try {
-    const updated = db.updateAporte(req.params.id, req.body);
+    const updated = await db.updateAporte(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Aporte não encontrado' });
     res.json(updated);
   } catch (error) {
@@ -206,9 +223,9 @@ app.put('/api/aportes/:id', (req, res) => {
   }
 });
 
-app.delete('/api/aportes/:id', (req, res) => {
+app.delete('/api/aportes/:id', async (req, res) => {
   try {
-    const success = db.deleteAporte(req.params.id);
+    const success = await db.deleteAporte(req.params.id);
     if (!success) return res.status(404).json({ error: 'Aporte não encontrado' });
     res.json({ success: true, message: 'Aporte excluído com sucesso' });
   } catch (error) {
@@ -220,9 +237,9 @@ app.delete('/api/aportes/:id', (req, res) => {
 // TOTAIS E INDICADORES FINANCEIROS
 // ==========================================
 
-app.get('/api/totals', (req, res) => {
+app.get('/api/totals', async (req, res) => {
   try {
-    const totals = db.getFinancialTotals();
+    const totals = await db.getFinancialTotals();
     res.json(totals);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -233,9 +250,9 @@ app.get('/api/totals', (req, res) => {
 // MIGRAÇÃO SEGURA DO LOCALSTORAGE
 // ==========================================
 
-app.post('/api/migrate-localstorage', (req, res) => {
+app.post('/api/migrate-localstorage', async (req, res) => {
   try {
-    const result = db.migrateFromLocalStorage(req.body);
+    const result = await db.migrateFromLocalStorage(req.body);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -246,15 +263,16 @@ app.post('/api/migrate-localstorage', (req, res) => {
 // BACKUP E RESTAURAÇÃO
 // ==========================================
 
-app.get('/api/backup', (req, res) => {
+app.get('/api/backup', async (req, res) => {
   try {
-    const backupDbPath = db.createDatabaseBackup('api_download');
-    const expenses = db.getAllExpenses();
-    const aportes = db.getAllAportes();
-    const totals = db.getFinancialTotals();
+    const backupDbPath = await db.createDatabaseBackup('api_download');
+    const expenses = await db.getAllExpenses();
+    const aportes = await db.getAllAportes();
+    const totals = await db.getFinancialTotals();
 
     const backupPayload = {
       exportedAt: new Date().toISOString(),
+      database: 'PostgreSQL',
       databaseFileBackup: backupDbPath ? path.basename(backupDbPath) : null,
       totals,
       expenses,
@@ -275,31 +293,40 @@ app.get('/api/backup', (req, res) => {
   }
 });
 
-app.post('/api/restore', (req, res) => {
+app.post('/api/restore', async (req, res) => {
   try {
-    const result = db.restoreData(req.body);
+    const result = await db.restoreData(req.body);
     res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
 
-app.post('/api/reset', (req, res) => {
+app.post('/api/reset', async (req, res) => {
   try {
-    const result = db.resetToSeed();
+    const result = await db.resetToSeed();
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'online',
-    timestamp: new Date().toISOString(),
-    database: 'SQLite',
-    totals: db.getFinancialTotals()
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    const totals = await db.getFinancialTotals();
+    res.json({
+      status: 'online',
+      timestamp: new Date().toISOString(),
+      database: 'PostgreSQL',
+      totals
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      database: 'PostgreSQL',
+      error: error.message
+    });
+  }
 });
 
 app.use((req, res) => {
@@ -307,60 +334,106 @@ app.use((req, res) => {
   res.status(404).send('Pagina nao encontrada.');
 });
 
-// Inicia o servidor
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n=======================================================`);
-  console.log(`  ✅ SERVIDOR INICIADO E FUNCIONANDO COM SUCESSO!     `);
-  console.log(`=======================================================`);
-  console.log(`  O sistema já está 100% pronto para uso!              `);
-  console.log(`  Acesse agora no seu navegador:                      `);
-  console.log(`                                                       `);
-  console.log(`  👉  http://localhost:${PORT}                        `);
-  console.log(`                                                       `);
-  console.log(`  📌 IMPORTANTE:                                      `);
-  console.log(`  Esta tela NÃO vai mudar nem fechar sozinha.         `);
-  console.log(`  Esta janela do terminal deve continuar ABERTA       `);
-  console.log(`  enquanto você utiliza o site, pois é ela que mantém `);
-  console.log(`  o servidor e o banco SQLite ativos.                  `);
-  console.log(`                                                       `);
-  console.log(`  Para encerrar o servidor no futuro:                 `);
-  console.log(`  Feche esta janela ou pressione Ctrl + C.            `);
-  console.log(`=======================================================\n`);
-
-  // Abre o navegador automaticamente somente após a porta 3000 estar 100% ativa e pronta
+// Inicialização segura com conexão ao PostgreSQL
+async function startServer() {
   try {
-    const { exec } = require('child_process');
-    if (process.platform === 'win32') {
-      exec(`start "" http://localhost:${PORT}/login`);
-    } else if (process.platform === 'darwin') {
-      exec(`open http://localhost:${PORT}/login`);
-    } else {
-      exec(`xdg-open http://localhost:${PORT}/login`);
-    }
-  } catch (e) {
-    // Falha silenciosa caso o ambiente não suporte execução de shell
-  }
-});
+    console.log('[PostgreSQL] Conectando ao banco de dados...');
+    await db.initDatabase();
+    auth.ensureSetupToken();
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.log(`[Aviso] A porta ${PORT} já está em uso por outro processo.`);
-    console.log(`O servidor já está ativo e respondendo em: http://localhost:${PORT}`);
-    try {
-      const { exec } = require('child_process');
-      if (process.platform === 'win32') {
-        exec(`start "" http://localhost:${PORT}/login`);
-      } else if (process.platform === 'darwin') {
-        exec(`open http://localhost:${PORT}/login`);
-      } else {
-        exec(`xdg-open http://localhost:${PORT}/login`);
-      }
-    } catch (e) {
-      // O servidor existente continua acessivel pelo endereco impresso acima.
+    let initialPort = parseInt(process.env.PORT, 10) || 3000;
+
+    function startListening(port) {
+      const server = app.listen(port, '0.0.0.0', () => {
+        console.log(`\n=======================================================`);
+        console.log(`  ✅ SERVIDOR INICIADO E FUNCIONANDO COM SUCESSO!     `);
+        console.log(`=======================================================`);
+        console.log(`  Banco de Dados: PostgreSQL                          `);
+        console.log(`  O sistema já está 100% pronto para uso!              `);
+        console.log(`  Acesse agora no seu navegador:                      `);
+        console.log(`                                                       `);
+        console.log(`  👉  http://localhost:${port}                        `);
+        console.log(`                                                       `);
+        console.log(`  📌 IMPORTANTE:                                      `);
+        console.log(`  Esta janela do terminal deve continuar ABERTA       `);
+        console.log(`  enquanto você utiliza o site.                       `);
+        console.log(`                                                       `);
+        console.log(`  Para encerrar o servidor no futuro:                 `);
+        console.log(`  Feche esta janela ou pressione Ctrl + C.            `);
+        console.log(`=======================================================\n`);
+
+        try {
+          const { exec } = require('child_process');
+          if (process.platform === 'win32') {
+            exec(`start "" http://localhost:${port}/login`);
+          } else if (process.platform === 'darwin') {
+            exec(`open http://localhost:${port}/login`);
+          } else {
+            exec(`xdg-open http://localhost:${port}/login`);
+          }
+        } catch (e) {
+          // Falha silenciosa se shell não disponível
+        }
+      });
+
+      server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE' || err.code === 'EACCES') {
+          const nextPort = port + 1;
+          if (nextPort <= initialPort + 10) {
+            console.log(`[Aviso] A porta ${port} está bloqueada pelo Windows (${err.code}). Tentando automaticamente a porta ${nextPort}...`);
+            startListening(nextPort);
+          } else {
+            console.error(`[Erro no Servidor]: Portas ${initialPort} a ${nextPort - 1} bloqueadas.`, err.message);
+            process.exit(1);
+          }
+        } else {
+          console.error(`[Erro no Servidor]:`, err);
+          process.exit(1);
+        }
+      });
     }
-    process.exit(0);
-  } else {
-    console.error(`[Erro no Servidor]:`, err);
+
+    startListening(initialPort);
+  } catch (error) {
+    console.error(`\n=======================================================`);
+    console.error(`  ❌ ERRO AO CONECTAR AO BANCO DE DADOS POSTGRESQL     `);
+    console.error(`=======================================================`);
+    
+    const errorMsg = error.message || error.detail || error.code || String(error);
+    console.error(`Detalhes do erro: ${errorMsg}`);
+    if (error.code) console.error(`Código do erro: ${error.code}`);
+    if (error.detail) console.error(`Informação adicional: ${error.detail}`);
+    if (error.hint) console.error(`Dica do PostgreSQL: ${error.hint}`);
+
+    console.error(`\nConfiguração lida do .env:`);
+    if (process.env.DATABASE_URL) {
+      const maskedUrl = process.env.DATABASE_URL.replace(/:([^:@]+)@/, ':****@');
+      console.error(`- Modo: DATABASE_URL (${maskedUrl})`);
+    } else {
+      console.error(`- Host: ${process.env.PGHOST || 'localhost'}`);
+      console.error(`- Porta: ${process.env.PGPORT || 5432}`);
+      console.error(`- Banco: ${process.env.PGDATABASE || 'chales_barreirinhas'}`);
+      console.error(`- Usuário: ${process.env.PGUSER || 'postgres'}`);
+    }
+
+    console.error(`\nComo resolver:`);
+    if (error.code === 'ECONNREFUSED' || (error.message && error.message.includes('ECONNREFUSED'))) {
+      console.error(`👉 O serviço do PostgreSQL NÃO está iniciado na porta 5432.`);
+      console.error(`   Inicie o serviço do PostgreSQL (via Services/Serviços do Windows ou pgAdmin).`);
+    } else if (error.code === '28P01' || (error.message && error.message.includes('password authentication'))) {
+      console.error(`👉 Senha incorreta para o usuário "${process.env.PGUSER || 'postgres'}".`);
+      console.error(`   Altere PGPASSWORD no arquivo .env com a senha correta definida na instalação do Postgres.`);
+    } else if (error.code === '3D000' || (error.message && error.message.includes('does not exist'))) {
+      console.error(`👉 O banco "${process.env.PGDATABASE || 'chales_barreirinhas'}" não existe.`);
+      console.error(`   Abra o pgAdmin / psql e execute: CREATE DATABASE ${process.env.PGDATABASE || 'chales_barreirinhas'};`);
+    } else {
+      console.error(`1. Verifique se o PostgreSQL está instalado e rodando`);
+      console.error(`2. Confira os dados de conexão no arquivo .env`);
+      console.error(`3. Crie o banco se ainda não existir: CREATE DATABASE chales_barreirinhas;`);
+    }
+    console.error(`=======================================================\n`);
     process.exit(1);
   }
-});
+}
+
+startServer();
